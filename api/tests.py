@@ -1,8 +1,10 @@
 from datetime import date, timedelta
+from unittest.case import skip
 from dateutil.relativedelta import relativedelta
 from django.test import SimpleTestCase
 from rest_framework.test import APISimpleTestCase
-from api.algorithms import worldPopulationRankByDate, dateByWorldPopulationRank, lifeExpectancyRemaining, populationCount
+from api.algorithms import worldPopulationRankByDate, dateByWorldPopulationRank, lifeExpectancyRemaining, populationCount, \
+    lifeExpectancyTotal, totalPopulation, calculateMortalityDistribution
 from api.datastore import dataStore
 from api.exceptions import *
 
@@ -58,9 +60,23 @@ class AlgorithmTests(SimpleTestCase):
     def test_byRank(self):
         self.assertEqual(date(2049,  3, 11), dateByWorldPopulationRank('unisex', 'World', date(1993, 12,  6), 7000000000))
 
-    def test_lifeExpectancy(self):
+    def test_byRank_veryLowRank(self):
+        self.assertEqual(date(2004, 11, 22), dateByWorldPopulationRank('female', 'World', date(2004, 11, 22), 10000))
+        self.assertEqual(date(2014,  1,  1), dateByWorldPopulationRank('male',   'World', date(2014,  1,  1), 300))
+
+    def test_byRank_veryHighRank(self):
+        self.assertEqual(date(2027, 11, 29), dateByWorldPopulationRank('unisex', 'World', date(2004, 11, 22), 3000000000))
+
+    def test_lifeExpectancyRemaining(self):
         self.assertAlmostEqual(28.53, lifeExpectancyRemaining('female', 'World', date(2049, 3, 11), relativedelta(years=55, months=4)), places=0)
-        self.assertAlmostEqual(28.05, lifeExpectancyRemaining('male', 'United Kingdom', date(2001, 5, 11), relativedelta(years=49)), places=0)
+        self.assertAlmostEqual(32.80, lifeExpectancyRemaining('male', 'United Kingdom', date(2001, 5, 11), relativedelta(years=49)), places=0)
+
+    def test_lifeExpectancyRemaining_maxAge(self):
+        self.assertAlmostEqual(1.12, lifeExpectancyRemaining('female', 'Afghanistan', date(1955, 1, 1), relativedelta(years=120)), places=0)
+        self.assertAlmostEqual(1.12, lifeExpectancyRemaining('male', 'United Kingdom', date(2050, 1, 1), relativedelta(years=120)), places=0)
+
+    def test_lifeExpectancyTotal(self):
+        self.assertAlmostEqual(90.34, lifeExpectancyTotal('female', 'World', date(2015, 6, 30)), places=0)
 
     def test_population(self):
         data = list(populationCount('Brazil', 18, 1980))
@@ -70,6 +86,14 @@ class AlgorithmTests(SimpleTestCase):
         self.assertEqual(151, len(data))
         self.assertEqual(1980, data[30]['year'])
         self.assertEqual(2719710, data[30]['total'])
+
+    def test_total_population(self):
+        self.assertEqual(totalPopulation('United Kingdom', date(2013, 1, 1)), 62961264)
+        self.assertEqual(totalPopulation('Afghanistan', date(2022, 12, 31)), 37599673)
+        self.assertEqual(totalPopulation('World', date(2018, 7, 31)), 7569167368)
+        
+    def test_mortality_distribution(self):
+        self.assertEqual(calculateMortalityDistribution('Germany', 'male', relativedelta(years=43, months=3))[3][1],2.2179399450663992)            
 
 
 class ApiIntegrationTests(APISimpleTestCase):
@@ -99,6 +123,7 @@ class ApiIntegrationTests(APISimpleTestCase):
 
     def testRankEndpointAged_successWithOffset(self):
         self._testEndpoint('/wp-rank/1952-03-11/unisex/World/aged/12y34m56d/')
+        self._testEndpoint('/wp-rank/1952-03-11/male/United%20Kingdom/aged/49y2m/')
 
     def testRankEndpointAged_invalidOffset(self):
         self._testEndpoint('/wp-rank/1952-03-11/unisex/World/aged/5x/', expectErrorContaining='offset')
@@ -112,14 +137,28 @@ class ApiIntegrationTests(APISimpleTestCase):
     def testPopulationEndpoint_successYearAndCountryOnly(self):
         self._testEndpoint('/population/1980/Brazil/')
 
+    def testPopulationEndpoint_totalPopulation(self):
+        self._testEndpoint('/population/Brazil/today-and-tomorrow/')
+        self._testEndpoint('/population/United%20Kingdom/2015-11-12/')
+
+    def testPopulationEndpoint_totalPopulation_outOfRange(self):
+        self._testEndpoint('/population/Brazil/2012-12-31/', expectErrorContaining='calculation date')
+        self._testEndpoint('/population/Brazil/2023-01-01/', expectErrorContaining='calculation date')
+
     def testLifeExpectancyRemainingEndpoint_successMaxDate(self):
         self._testEndpoint('/life-expectancy/remaining/female/World/2094-12-31/100y/')
 
     def testLifeExpectancyRemainingEndpoint_exceedMaxDate(self):
         self._testEndpoint('/life-expectancy/remaining/female/World/2095-01-01/100y/', expectErrorContaining='calculation date')
 
+    def testLifeExpectancyRemainingEndpoint_successMaxAge(self):
+        self._testEndpoint('/life-expectancy/remaining/male/Afghanistan/1990-01-01/120y/')
+
     def testLifeExpectancyRemainingEndpoint_exceedAge(self):
-        self._testEndpoint('/life-expectancy/remaining/female/World/2094-12-31/100y1d/', expectErrorContaining='age')
+        self._testEndpoint('/life-expectancy/remaining/female/World/2094-12-31/120y1d/', expectErrorContaining='age')
+
+    def testLifeExpectancyRemainingEndpoint_exceedAgeFuture(self):
+        self._testEndpoint('/life-expectancy/remaining/female/World/2094-12-31/120y1d/', expectErrorContaining='age')
 
     def testLifeExpectancyRemainingEndpoint_successMinDate(self):
         self._testEndpoint('/life-expectancy/remaining/female/World/1955-01-01/1/')
@@ -128,7 +167,13 @@ class ApiIntegrationTests(APISimpleTestCase):
         self._testEndpoint('/life-expectancy/remaining/female/World/1954-12-31/1/', expectErrorContaining='calculation date')
 
     def testLifeExpectancyRemainingEndpoint_exceedAgeAtMinDate(self):
-        self._testEndpoint('/life-expectancy/remaining/female/World/1955-01-01/100y1d/', expectErrorContaining='age')
+        self._testEndpoint('/life-expectancy/remaining/female/World/1955-01-01/120y1d/', expectErrorContaining='age')
+
+    def testLifeExpectancyRemainingEndpoint_successMaxBirthdate(self):
+        self._testEndpoint('/life-expectancy/remaining/female/World/2015-06-30/1/')
+
+    def testLifeExpectancyRemainingEndpoint_exceedMaxBirthdate(self):
+        self._testEndpoint('/life-expectancy/remaining/female/World/2015-07-02/1/', expectErrorContaining='birthdate')
 
     def testLifeExpectancyTotalEndpoint_successMinBirthdate(self):
         self._testEndpoint('/life-expectancy/total/female/World/1920-01-01/')
@@ -137,12 +182,16 @@ class ApiIntegrationTests(APISimpleTestCase):
         self._testEndpoint('/life-expectancy/total/female/World/1919-12-31/', expectErrorContaining='birthdate')
 
     def testLifeExpectancyTotalEndpoint_successMaxBirthdate(self):
-        self._testEndpoint('/life-expectancy/total/female/World/2059-12-31/')
+        self._testEndpoint('/life-expectancy/total/female/World/2015-06-30/')
 
     def testLifeExpectancyTotalEndpoint_exceedMaxBirthdate(self):
-        self._testEndpoint('/life-expectancy/total/female/World/2060-01-01/', expectErrorContaining='birthdate')
+        self._testEndpoint('/life-expectancy/total/female/World/2015-07-01/', expectErrorContaining='birthdate')
+
+    def testMortalityDistribution(self):
+        self._testEndpoint('/mortality-distribution/United%20Kingdom/male/49y2m/today/')
 
 
+@skip
 class AlgorithmAcceptanceTests(SimpleTestCase):
     """
     A set of tests based on the acceptance tests previously written in R.

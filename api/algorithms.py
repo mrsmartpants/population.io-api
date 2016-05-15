@@ -50,26 +50,19 @@ def generateExtrapolationTable(sex, region):
 
     july1from1950to2100 = [inPosixDays(date(y, 7, 1)) for y in xrange(1950, 2100+1)]
 
-    dateRange1970to2100inPosixDays = range(inPosixDays(date(1950,1,1)), inPosixDays(date(2100,12,31))+1)
+    dateRange1950to2100inPosixDays = range(inPosixDays(date(1950,1,1)), inPosixDays(date(2100,12,31))+1)
 
     ''' --- Date interpolation function --- '''
     def dateInterp(iage):
-        popi = pop1[dataStore.data.Age == iage]
-        #popi = pop1[Age == 21] #select particular age COMMENT OUT
-        popi = np.asarray(popi[SEXES[sex]])
+        popi = np.asarray(pop1.loc[dataStore.data.Age == iage.name, SEXES[sex]])
 
         # spline interpolation function from Scipy Package
-        iuspl = InterpolatedUnivariateSpline(july1from1950to2100, popi)
-        iuspl_pred = iuspl(dateRange1970to2100inPosixDays)
-        return iuspl_pred
-    ''' --- function end --- '''
+        iuspl = InterpolatedUnivariateSpline(july1from1950to2100, popi, k=4)
+        return iuspl(dateRange1950to2100inPosixDays)
 
-    # store the results of the date interpolation
-    table = []
-    for i in range(0,100):
-        table.append(np.array(dateInterp(i)))
-    # List to pandas dataframe | dataframe.T transposes data
-    table = pd.DataFrame(table).T # from 55151col x 100row --> 55151row x 100col
+    # --- store the results of the date interpolation --- #
+    result1 = pd.DataFrame(index = range(0,len(dateRange1950to2100inPosixDays)), columns = range(0,100))
+    table = result1.apply(dateInterp, axis=0)
 
     # Change column names by appending "age_"
     oldHeaders = table.columns
@@ -83,7 +76,10 @@ def generateExtrapolationTable(sex, region):
     def toDate(d):
         return (date(1970, 1, 1) + timedelta(days=d)).strftime('%Y-%m-%d')
     toDate = np.vectorize(toDate) # vectorize the function to iterate over numpy ndarray
-    fullDateRange = toDate(dateRange1970to2100inPosixDays) # 1st result: 1950-01-01
+    #fullDateRange = toDate(dateRange1970to2100inPosixDays) # 1st result: 1950-01-01
+    fullDateRange = len(dateRange1950to2100inPosixDays)*[None]
+    for i in range(0,len(dateRange1950to2100inPosixDays)):
+        fullDateRange[i] = toDate(dateRange1950to2100inPosixDays[i])
 
     # Add the fullDateRange to the result1
     table['date1'] = fullDateRange
@@ -104,13 +100,10 @@ def dayInterpA(table, date):
     popi = table[table.date1 == iDate]
 
     # Remove the columns for age 100 and the date1
-    rmCols = [col for col in popi.columns if col not in ['date1', 'age_100']]
-    popi = popi[rmCols]
+    popi = popi.iloc[:,0:100]
 
     # store the popi results into an array for the interpolation
     #popi = (np.asarray(popi)).tolist()
-    popi = popi.values
-    popi = [vals for i in popi for vals in i]
     popi = np.asarray(popi)
 
     # Interpolate the age in Days
@@ -118,12 +111,9 @@ def dayInterpA(table, date):
     iuspl2_pred = iuspl2(AGEOUT)
 
     # the output
-    col1 = pd.DataFrame(AGEOUT, columns=['AGE'])
-    col2 = pd.DataFrame(iuspl2_pred, columns = ['POP'])
-    #print col1, col2
-    merged = col1.join(col2)
-    #print merged
-    #return pd.DataFrame(ageout, iuspl2_pred, columns=['AGE', 'POP'])
+    merged = pd.DataFrame(index = range(0,len(AGEOUT)), columns = ['AGE','POP'])
+    merged['AGE'] = AGEOUT
+    merged['POP'] = iuspl2_pred
     return merged
 
 def _calculateRankByDate(table, dob, date):
@@ -211,11 +201,8 @@ def dateByWorldPopulationRank(sex, region, dob, rank):
     # The number of years from input birth to '2100/01/01'
     length_time = relativedelta(date(2100, 1, 1), dob).years
 
-    # Make sure that difference between DOB and final Date > 100
-    if length_time < 100:
-        l_max = np.round(length_time)
-    else:
-        l_max = 100
+    # Make sure that difference between DOB and final Date < 100
+    l_max = min(int(np.floor(length_time/10)*10), 100)
 
     xx = []
     for jj in range(1, (len(range(10, l_max+10, 10))+1)):
@@ -241,12 +228,13 @@ def dateByWorldPopulationRank(sex, region, dob, rank):
     Upper_bound = (np.amin(np.where((xx < rank) == False))+1)*10 # +1 because of zero index
     Lower_bound = Upper_bound-10
 
+    if xx[1] > rank:
+        Lower_bound = 2
+
     if Lower_bound < 2:
         # I don't know what this error means, but if Lower_bound is < 2, then range_2 will start with a value < 0
         # which means _calculateRankByDate() will be called with a negative age, and that will fail
         raise DataOutOfRangeError()
-
-    #print Upper_bound, Lower_bound
 
     # Define new range
     range_2 = np.arange(Lower_bound-2, Upper_bound+1) # +1 due to zero index
@@ -262,8 +250,12 @@ def dateByWorldPopulationRank(sex, region, dob, rank):
         xx_[(kk - np.amin(range_2)),1] = kk*365
 
     # Search again for the yearly interval containing wRank
-    Upper_bound = xx_[np.amin(np.where((xx_[:,0] < rank) == False)),1]
-    Lower_bound = xx_[np.amax(np.where((xx_[:,0] < rank) == True)),1]
+    if xx_[1,0] > rank:
+        Lower_bound = 0
+        Upper_bound = xx_[-1,1]
+    else:
+        Upper_bound = xx_[np.amin(np.where((xx_[:,0] < rank) == False)),1]
+        Lower_bound = xx_[np.amax(np.where((xx_[:,0] < rank) == True)),1]
 
     range_3 = np.arange(Lower_bound, Upper_bound+1)
     #print (range_3)
@@ -320,13 +312,13 @@ def lifeExpectancyRemaining(sex, region, refdate, age):
     if refdate < date(1955, 1, 1) or refdate >= date(2095, 1, 1):
         raise CalculationDateOutOfRangeError(refdate, 'from 1955-01-01 to 2094-12-31')
     age_float = relativedelta_to_decimal_years(age)
-    if age_float > 100:
+    if age_float > 120:
         raise AgeOutOfRangeError(age)
     if refdate - age > date(2015, 6, 30):
         raise EffectiveBirthdateOutOfRangeError(invalidValue=(refdate-age))
 
     # find beginning of 5 yearly period for the le_date
-    le_yr = refdate.year   #(le_date.loc['1'])[0:4]
+    le_yr = refdate.year
     lowest_year = math.floor(int(le_yr)/5)*5
 
     # extract a row corresponding to the time-period
@@ -353,9 +345,9 @@ def lifeExpectancyRemaining(sex, region, refdate, age):
     life_exp_[:,3] = life_exp_prd[life_exp_prd.columns[2]].values
 
     # interpolations
-    xx_interp1 = InterpolatedUnivariateSpline(life_exp_[(np.amax(max(np.where(life_exp_[:,1] == 0)))):,0], life_exp_[(np.amax(max(np.where(life_exp_[:,1] == 0)))):,1])
-    xx_interp2 = InterpolatedUnivariateSpline(life_exp_[(np.amax(max(np.where(life_exp_[:,2] == 0)))):,0], life_exp_[(np.amax(max(np.where(life_exp_[:,2] == 0)))):,2])
-    xx_interp3 = InterpolatedUnivariateSpline(life_exp_[(np.amax(max(np.where(life_exp_[:,3] == 0)))):,0], life_exp_[(np.amax(max(np.where(life_exp_[:,3] == 0)))):,3])
+    xx_interp1 = InterpolatedUnivariateSpline(life_exp_[:,0],life_exp_[:,1])
+    xx_interp2 = InterpolatedUnivariateSpline(life_exp_[:,0],life_exp_[:,2])
+    xx_interp3 = InterpolatedUnivariateSpline(life_exp_[:,0],life_exp_[:,3])
 
     # predictions
     x_interp1 = xx_interp1(age_float)   #interpolated value for AGE in earlier 5 yearly period
@@ -372,8 +364,8 @@ def lifeExpectancyRemaining(sex, region, refdate, age):
     life_exp_yr[:,0] = [addDate(lowest_year-5), addDate(lowest_year), addDate(lowest_year+5)]
     life_exp_yr[:,1] = [x_interp1, x_interp2, x_interp3]
 
-    return life_exp_yr[0,1]
-    #life_exp_yr[,1]<- as.numeric(as.Date(c(paste(lowest_yr-5+3,1,1,sep="/"),paste(lowest_yr+3,1,1,sep="/"),paste(lowest_yr+5+3,1,1,sep="/")),"%Y/%m/%d"))
+    life_exp_spl = InterpolatedUnivariateSpline(life_exp_yr[:,0], life_exp_yr[:,1], k=2)
+    return life_exp_spl(inPosixDays(refdate))[()]
 
 def lifeExpectancyTotal(sex, region, dob):
     if not isinstance(dob, date):
@@ -414,3 +406,139 @@ def populationCount(country, age=None, year=None):
         series = row[1]
         results.append({'year': series['Time'], 'age': series['Age'], 'males': int(series['PopMale']*1000), 'females': int(series['PopFemale']*1000), 'total': int(series['PopTotal']*1000)})
     return results
+
+def totalPopulation(country, refdate):
+    # check that all arguments have the right type (even though it's not very pythonic)
+    if not isinstance(country, basestring) or (not isinstance(refdate, date)):
+        raise TypeError('One or more arguments did not match the expected parameter type')
+
+    # confirm that sex and region contain valid values
+    if country not in dataStore.countries:
+        raise InvalidCountryError(country)
+
+    # check the various date requirements
+    if refdate < date(2013, 1, 1) or refdate > date(2022, 12, 31):
+        raise CalculationDateOutOfRangeError(refdate, 'between 2013-01-01 and 2022-12-31')
+
+    # filter the rows by country and date, then return the totpop column
+    refdateAsShortDateString = refdate.strftime('%y/%m/%d')
+    column_country = dataStore.total_population['country']
+    column_date = dataStore.total_population['date']
+    row = dataStore.total_population[column_country==country][column_date==refdateAsShortDateString]
+    result = int(row['totpop'])
+    return result
+    
+def continentBirthsByDate(continent, refdate):
+    # check that all arguments have the right type (even though it's not very pythonic)
+    if not isinstance(continent, basestring) or (not isinstance(refdate, date)):
+        raise TypeError('One or more arguments did not match the expected parameter type')
+        
+    # confirm that sex and region contain valid values
+    if continent not in dataStore.continent_countries:
+        raise InvalidContinentError(continent) 
+        
+    # check the various date requirements
+    if refdate < date(1950, 1, 1) or refdate > date(2100, 12, 31):
+        raise CalculationDateOutOfRangeError(refdate, 'between 1950-01-01 and 2100-12-31')
+        
+    refdateAsShortDateString = refdate.strftime('%y/%m/%d')
+         
+    cntrys = dataStore.continent_countries.loc[Continent==continent,'POPIO_NAME']
+     
+    #Population aged 0 at DATE
+    births1 = dataStore.births_day_country.loc[refdateAsShortDateString,cntrys]
+    #Population aged 0 at DATE+1
+    births2 = dataStore.births_day_country.loc[refdateAsShortDateString+1,cntrys]
+     
+    births_on_day = births2-births1
+    births_on_day[births_on_day<0] = 0
+         
+    return list(births_on_day)
+
+def calculateMortalityDistribution(country, sex, age):
+    # check that all arguments have the right type (even though it's not very pythonic)
+    if not isinstance(sex, basestring) or not isinstance(country, basestring) or not isinstance(age, relativedelta):
+        raise TypeError('One or more arguments did not match the expected parameter type')
+
+    # confirm that sex and region contain valid values
+    if sex not in SEXES_LIFE_EXPECTANCY:
+        raise InvalidSexError(sex)
+    if country not in dataStore.countries:
+        raise InvalidCountryError(country)
+    age_float = relativedelta_to_decimal_years(age)
+    if age_float > 120:
+        raise AgeOutOfRangeError(age)
+
+    # helper function
+    def setInterpDate(x, offset):
+        """ ??? """
+        idate = datetime.strptime(str(x+offset+3)+"/1"+"/1", "%Y/%m/%d")
+        return (idate - datetime(1970, 1, 1)).days
+    def rounddown(x, base=5):
+        return int(base * math.floor(float(x)/base))
+
+    # get columns which correspond to the inputs
+    idate = datetime.utcnow().date()
+    iage = age_float
+    iyear = idate.year
+    flr_yr = rounddown(iyear, base=5)
+
+    # get closest age in 5 year windows
+    flr_age = rounddown(iage, base=5)
+
+    # Get the age cohort
+    if flr_age >= 5:
+        cohort_st = list(dataStore.survival_ratio.columns).index("X"+str(flr_age-5))
+    else:
+        cohort_st = 4
+    cohort_end = len(dataStore.survival_ratio.columns)
+    #cohort = dataStore.survival_ratio.loc[(dataStore.survival_ratio.region==country) & (dataStore.survival_ratio.sex==SEXES_LIFE_EXPECTANCY[sex]) & (dataStore.survival_ratio.Begin_prd >=(flr_yr-5))].ix[:,cohort_st:cohort_end]
+
+    # get older and younger cohort
+    cohort_old = dataStore.survival_ratio.loc[(dataStore.survival_ratio.region==country) & (dataStore.survival_ratio.sex==SEXES_LIFE_EXPECTANCY[sex]) & (dataStore.survival_ratio.Begin_prd >=(flr_yr-10))].ix[:,cohort_st:cohort_end]
+    #cohort_young = dataStore.survival_ratio.loc[(dataStore.survival_ratio.region==country) & (dataStore.survival_ratio.sex==SEXES_LIFE_EXPECTANCY[sex]) & (dataStore.survival_ratio.Begin_prd >=(flr_yr))].ix[:,cohort_st:cohort_end]
+
+    # get dates for the jan 1st for 3 years --> then to Unix timestamp
+    dates = [setInterpDate(flr_yr, -5), setInterpDate(flr_yr, 0), setInterpDate(flr_yr, +5)]
+
+    # make the output dataStore.survival_ratiotable
+    temp = np.zeros(shape=(len(cohort_old.columns),7))
+    odata = pd.DataFrame(temp, columns=["lower_age","pr0","pr1","pr2","pr_sx_date","death_percent","dth_pc_after_exact_age"])
+
+    # fill in with existing values
+    if iage>=5:
+        odata['lower_age'] = np.arange(flr_age-5, 130, 5)
+    else:
+        odata['lower_age'] = np.arange(0, 130, 5)
+    odata['pr0'] = np.matrix(cohort_old).diagonal().T
+    odata['pr1'] = np.matrix(cohort_old).diagonal(-1).T
+    odata['pr2'] = np.matrix(cohort_old).diagonal(-2).T
+
+    # Interpolate for the input date (idate)
+    odata["pr_sx_date"] = np.array([InterpolatedUnivariateSpline(dates,list(odata.ix[i,1:4]),k=2)(inPosixDays(idate)) for i in np.arange(0, len(cohort_old.columns),1)])
+
+    clen = len(odata)
+    # calc the % deaths
+    odata["death_percent"][1] = 100
+    for i in np.arange(2,clen,1):
+        odata["death_percent"][i] = odata["death_percent"][i-1]*odata["pr_sx_date"][i]
+
+    # percentage deaths
+    for i in np.arange(1,clen-1,1):
+        odata["dth_pc_after_exact_age"][i] = odata["death_percent"][i] - odata["death_percent"][i+1]
+
+    odata["dth_pc_after_exact_age"][clen-1] = odata["death_percent"][clen-1]
+
+    # proportion of people who will die before iage
+    beforeDod = odata["dth_pc_after_exact_age"][1] * (iage - flr_age)/5
+    odata["dth_pc_after_exact_age"][1] = odata["dth_pc_after_exact_age"][1] - beforeDod
+    odata["dth_pc_after_exact_age"] = odata["dth_pc_after_exact_age"]* 100/odata["dth_pc_after_exact_age"].sum()
+
+    # add 5 to each of the "ages"
+    if iage>=5:
+        odata["lower_age"] = odata["lower_age"]+5
+    else:
+        odata["lower_age"] = odata["lower_age"]+iage
+
+    output = odata.ix[0:clen-1,['lower_age', 'dth_pc_after_exact_age']]
+    return list(output.values)
