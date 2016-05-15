@@ -1,4 +1,4 @@
-''' 
+'''
 R to python: yourRank.r
 '''
 import math
@@ -314,7 +314,7 @@ def lifeExpectancyRemaining(sex, region, refdate, age):
     age_float = relativedelta_to_decimal_years(age)
     if age_float > 120:
         raise AgeOutOfRangeError(age)
-    if refdate - age > date(2015, 6, 30):
+    if refdate - age > date(2095, 6, 30):
         raise EffectiveBirthdateOutOfRangeError(invalidValue=(refdate-age))
 
     # find beginning of 5 yearly period for the le_date
@@ -427,32 +427,32 @@ def totalPopulation(country, refdate):
     row = dataStore.total_population[column_country==country][column_date==refdateAsShortDateString]
     result = int(row['totpop'])
     return result
-    
+
 def continentBirthsByDate(continent, refdate):
     # check that all arguments have the right type (even though it's not very pythonic)
     if not isinstance(continent, basestring) or (not isinstance(refdate, date)):
         raise TypeError('One or more arguments did not match the expected parameter type')
-        
+
     # confirm that sex and region contain valid values
     if continent not in dataStore.continent_countries:
-        raise InvalidContinentError(continent) 
-        
+        raise InvalidContinentError(continent)
+
     # check the various date requirements
     if refdate < date(1950, 1, 1) or refdate > date(2100, 12, 31):
         raise CalculationDateOutOfRangeError(refdate, 'between 1950-01-01 and 2100-12-31')
-        
+
     refdateAsShortDateString = refdate.strftime('%y/%m/%d')
-         
+
     cntrys = dataStore.continent_countries.loc[Continent==continent,'POPIO_NAME']
-     
+
     #Population aged 0 at DATE
     births1 = dataStore.births_day_country.loc[refdateAsShortDateString,cntrys]
     #Population aged 0 at DATE+1
     births2 = dataStore.births_day_country.loc[refdateAsShortDateString+1,cntrys]
-     
+
     births_on_day = births2-births1
     births_on_day[births_on_day<0] = 0
-         
+
     return list(births_on_day)
 
 def calculateMortalityDistribution(country, sex, age):
